@@ -69,3 +69,10 @@ check-cfg = [
     "cfg(peer_storage)",
     "cfg(dual_funding)",
 ]
+
+# Version 2 (BLAKE2b) block headers live in our rust-bitcoin fork, behind its
+# own "blake2b" feature. Patching here lets the workspace build and test the
+# lightning-block-sync "blake2b" feature; with the feature off the fork is a
+# drop-in for the published crate.
+[patch.crates-io]
+bitcoin = { git = "https://github.com/DarkWebDivingClub/rust-bitcoin-knots.git", branch = "dwdc/blake2b-headers" }

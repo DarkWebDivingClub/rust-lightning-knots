@@ -83,6 +83,63 @@ impl TryInto<BlockHeaderData> for JsonResponse {
 	}
 }
 
+/// Reads the version 2 header fields from a verbose `getblockheader` or
+/// `getblock` result.
+///
+/// Bitcoin Knots reports the header format in `headerv`: 1 for the original
+/// 80-byte header, 2 for the 164-byte BLAKE2b header. A node that predates the
+/// field — Bitcoin Core, or Knots before the fork — omits it, which reads the
+/// same as 1 and keeps the pre-fork behaviour.
+///
+/// The v2 fields are consensus data, not decoration: they feed the `h1` tagged
+/// hash and so determine [`Header::block_hash`]. Dropping them would produce a
+/// header that looks well-formed and hashes to the wrong value.
+///
+/// `extranonce`, `xor_key` and `mm_rhs` arrive byte-reversed, the same
+/// convention the RPC uses for `merkleroot` and every other hash, so each is
+/// reversed back into serialization order here.
+#[cfg(feature = "blake2b")]
+fn v2_from_json(response: &serde_json::Value) -> Result<Option<bitcoin::block::HeaderV2>, ()> {
+	match response.get("headerv") {
+		None => return Ok(None),
+		Some(v) => match v.as_u64().ok_or(())? {
+			1 => return Ok(None),
+			2 => {},
+			_ => return Err(()),
+		},
+	}
+
+	macro_rules! num {
+		($name: expr, $ty: ty) => {
+			<$ty>::try_from(response.get($name).ok_or(())?.as_u64().ok_or(())?).map_err(|_| ())?
+		};
+	}
+	macro_rules! bytes {
+		($name: expr, $len: expr) => {{
+			let mut b = <[u8; $len]>::from_hex(
+				response.get($name).ok_or(())?.as_str().ok_or(())?,
+			)
+			.map_err(|_| ())?;
+			b.reverse();
+			b
+		}};
+	}
+
+	Ok(Some(bitcoin::block::HeaderV2 {
+		nonce2: num!("nonce2", u32),
+		nonce3: num!("nonce3", u32),
+		extranonce: bytes!("extranonce", 16),
+		time_offset: num!("time_offset", u32),
+		txcount: num!("txcount", u16),
+		flags: num!("flags", u8),
+		xor_key_mask_clear_bits: num!("xor_key_mask_clear_bits", u8),
+		xor_key: bytes!("xor_key", 16),
+		height: i32::try_from(response.get("height").ok_or(())?.as_u64().ok_or(())?)
+			.map_err(|_| ())?,
+		mm_rhs: bytes!("mm_rhs", 32),
+	}))
+}
+
 impl TryFrom<serde_json::Value> for BlockHeaderData {
 	type Error = ();
 
@@ -110,6 +167,8 @@ impl TryFrom<serde_json::Value> for BlockHeaderData {
 					<[u8; 4]>::from_hex(get_field!("bits", as_str)).map_err(|_| ())?,
 				)),
 				nonce: get_field!("nonce", as_u64).try_into().map_err(|_| ())?,
+				#[cfg(feature = "blake2b")]
+				v2: v2_from_json(&response)?,
 			},
 			chainwork: hex_to_work(get_field!("chainwork", as_str)).map_err(|_| ())?,
 			height: get_field!("height", as_u64).try_into().map_err(|_| ())?,

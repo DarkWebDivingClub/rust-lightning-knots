@@ -63,6 +63,8 @@ impl Blockchain {
 					time,
 					bits,
 					nonce: 0,
+					#[cfg(feature = "blake2b")]
+					v2: None,
 				},
 				txdata: vec![coinbase],
 			});
