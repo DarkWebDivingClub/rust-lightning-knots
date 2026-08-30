@@ -19,8 +19,10 @@
 #![cfg(all(feature = "blake2b", feature = "rpc-client"))]
 
 use bitcoin::consensus::encode;
+use bitcoin::hashes::Hash;
 use bitcoin::hex::DisplayHex;
 use lightning_block_sync::http::JsonResponse;
+use lightning_block_sync::poll::Validate;
 use lightning_block_sync::BlockHeaderData;
 
 use std::convert::TryInto;
@@ -240,4 +242,33 @@ fn a_block_with_a_v2_header_deserialises() {
 		seen += 1;
 	}
 	assert_eq!(seen, 2, "should have covered a v1 and a v2 block");
+}
+
+/// What the poller does with a header once it has one.
+///
+/// `Validate` re-derives the proof-of-work hash and refuses the header unless
+/// it matches the one the source reported, so it is the check that would catch
+/// a v2 header hashed as if it were v1 — and the check that a v1-only client
+/// silently fails. Nothing about it needed changing for v2: the target comes
+/// from the header's own nBits, and `validate_pow` goes through
+/// `block_hash()`, which knows the difference.
+#[test]
+fn a_v2_header_passes_proof_of_work_validation() {
+	let data: serde_json::Value =
+		serde_json::from_str(include_str!("data/regtest_activation.json")).unwrap();
+
+	for capture in data["headers"].as_array().unwrap() {
+		let json = capture["json"].clone();
+		let height = json["height"].as_u64().unwrap();
+		let hash: bitcoin::BlockHash = json["hash"].as_str().unwrap().parse().unwrap();
+
+		let validated = header_from(json)
+			.validate(hash)
+			.unwrap_or_else(|e| panic!("height {height}: {e:?}"));
+		assert_eq!(validated.header.block_hash(), hash);
+
+		// And it is refused for a hash that is not its own.
+		let wrong = bitcoin::BlockHash::from_byte_array([7u8; 32]);
+		assert!(header_from(capture["json"].clone()).validate(wrong).is_err());
+	}
 }
