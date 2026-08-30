@@ -25,6 +25,13 @@ unsafe_revoked_tx_signing = []
 
 std = []
 
+# Version 2 (BLAKE2b) block headers, as used by Bitcoin Knots after the
+# BIP-110 split. Off by default: it enables bitcoin/blake2b, which reads bit 31
+# of nVersion as a header format flag rather than as part of the version
+# number. Only the test utilities build headers field by field, so this feature
+# affects nothing else here.
+blake2b = ["bitcoin/blake2b"]
+
 dnssec = ["dnssec-prover/validation"]
 
 # Generates low-r bitcoin signatures, which saves 1 byte in 50% of the cases

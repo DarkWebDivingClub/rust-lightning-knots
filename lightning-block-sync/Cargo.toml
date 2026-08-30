@@ -20,17 +20,17 @@ rpc-client = [ "serde_json", "chunked_transfer" ]
 # Version 2 (BLAKE2b) block headers, as used by Bitcoin Knots after the
 # BIP-110 split. Off by default: it enables bitcoin/blake2b, which reads bit 31
 # of nVersion as a format flag rather than as part of the version number.
-blake2b = [ "bitcoin/blake2b" ]
+blake2b = [ "bitcoin/blake2b", "lightning/blake2b" ]
 
 [dependencies]
 bitcoin = "0.32.2"
-lightning = { version = "0.2.0" }
+lightning = { version = "0.2.0", path = "../lightning" }
 tokio = { version = "1.35", features = [ "io-util", "net", "time", "rt" ], optional = true }
 serde_json = { version = "1.0", optional = true }
 chunked_transfer = { version = "1.4", optional = true }
 
 [dev-dependencies]
-lightning = { version = "0.2.0" }
+lightning = { version = "0.2.0", path = "../lightning", features = ["_test_utils"] }
 tokio = { version = "1.35", features = [ "macros", "rt" ] }
 
 [lints]

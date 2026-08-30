@@ -116,6 +116,8 @@ pub fn mine_transaction_without_consistency_checks<'a, 'b, 'c, 'd>(
 			time: height,
 			bits: CompactTarget::from_consensus(42),
 			nonce: 42,
+			#[cfg(feature = "blake2b")]
+			v2: None,
 		},
 		txdata: Vec::new(),
 	};
@@ -265,6 +267,8 @@ pub fn create_dummy_header(prev_blockhash: BlockHash, time: u32) -> Header {
 		time,
 		bits: CompactTarget::from_consensus(42),
 		nonce: 42,
+		#[cfg(feature = "blake2b")]
+		v2: None,
 	}
 }
 
