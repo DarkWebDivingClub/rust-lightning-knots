@@ -86,24 +86,29 @@ impl TryInto<BlockHeaderData> for JsonResponse {
 /// Reads the version 2 header fields from a verbose `getblockheader` or
 /// `getblock` result.
 ///
-/// Bitcoin Knots reports the header format in `headerv`: 1 for the original
-/// 80-byte header, 2 for the 164-byte BLAKE2b header. A node that predates the
-/// field — Bitcoin Core, or Knots before the fork — omits it, which reads the
-/// same as 1 and keeps the pre-fork behaviour.
+/// Bitcoin Knots reports the format in `header_version`: **2** for the
+/// 164-byte BLAKE2b header and **0** for the historical 80-byte one. Note
+/// that it is 0 rather than 1, and that a node predating the field — Bitcoin
+/// Core, or Knots before the fork — omits it entirely; both read as v1.
 ///
-/// The v2 fields are consensus data, not decoration: they feed the `h1` tagged
-/// hash and so determine [`Header::block_hash`]. Dropping them would produce a
-/// header that looks well-formed and hashes to the wrong value.
+/// The v2 fields are consensus data, not decoration: they feed the `h1`
+/// tagged hash and so determine [`Header::block_hash`]. A header assembled
+/// without them looks well-formed and hashes to the wrong value, which is
+/// exactly the failure this exists to prevent.
 ///
-/// `extranonce`, `xor_key` and `mm_rhs` arrive byte-reversed, the same
-/// convention the RPC uses for `merkleroot` and every other hash, so each is
-/// reversed back into serialization order here.
+/// Two encodings to watch:
+///
+/// * `nonce2` and `nonce3` are **little-endian hex strings**, not numbers —
+///   the RPC serializes the `uint32` and hexes the bytes.
+/// * `extranonce`, `xor_key` and `mm_rhs` are in **serialization order**, not
+///   the reversed form used for `merkleroot` and other hashes, so none of
+///   them is reversed here.
 #[cfg(feature = "blake2b")]
 fn v2_from_json(response: &serde_json::Value) -> Result<Option<bitcoin::block::HeaderV2>, ()> {
-	match response.get("headerv") {
+	match response.get("header_version") {
 		None => return Ok(None),
 		Some(v) => match v.as_u64().ok_or(())? {
-			1 => return Ok(None),
+			0 => return Ok(None),
 			2 => {},
 			_ => return Err(()),
 		},
@@ -114,26 +119,34 @@ fn v2_from_json(response: &serde_json::Value) -> Result<Option<bitcoin::block::H
 			<$ty>::try_from(response.get($name).ok_or(())?.as_u64().ok_or(())?).map_err(|_| ())?
 		};
 	}
+	/// Fixed-width byte string, in serialization order.
 	macro_rules! bytes {
-		($name: expr, $len: expr) => {{
-			let mut b = <[u8; $len]>::from_hex(
-				response.get($name).ok_or(())?.as_str().ok_or(())?,
-			)
-			.map_err(|_| ())?;
-			b.reverse();
-			b
-		}};
+		($name: expr, $len: expr) => {
+			<[u8; $len]>::from_hex(response.get($name).ok_or(())?.as_str().ok_or(())?)
+				.map_err(|_| ())?
+		};
+	}
+	/// A `uint32` the RPC serialized little-endian and then hexed.
+	macro_rules! le_hex_u32 {
+		($name: expr) => {
+			u32::from_le_bytes(bytes!($name, 4))
+		};
 	}
 
 	Ok(Some(bitcoin::block::HeaderV2 {
-		nonce2: num!("nonce2", u32),
-		nonce3: num!("nonce3", u32),
+		nonce2: le_hex_u32!("nonce2"),
+		nonce3: le_hex_u32!("nonce3"),
 		extranonce: bytes!("extranonce", 16),
 		time_offset: num!("time_offset", u32),
+		// Present for every v2 header: the RPC reports the block's own count
+		// when it has the block, and the header's committed count when it has
+		// only the header.
 		txcount: num!("txcount", u16),
-		flags: num!("flags", u8),
+		flags: num!("header_flags", u8),
 		xor_key_mask_clear_bits: num!("xor_key_mask_clear_bits", u8),
 		xor_key: bytes!("xor_key", 16),
+		// Consensus requires this to equal the previous block's height plus
+		// one, so the index height the RPC already reports is the same number.
 		height: i32::try_from(response.get("height").ok_or(())?.as_u64().ok_or(())?)
 			.map_err(|_| ())?,
 		mm_rhs: bytes!("mm_rhs", 32),

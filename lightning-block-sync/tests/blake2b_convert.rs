@@ -20,10 +20,11 @@
 
 use bitcoin::consensus::encode;
 use bitcoin::hashes::Hash;
-use bitcoin::hex::DisplayHex;
+use bitcoin::hex::{DisplayHex, FromHex};
 use lightning_block_sync::http::JsonResponse;
 use lightning_block_sync::poll::Validate;
 use lightning_block_sync::BlockHeaderData;
+use serde_json::Value;
 
 use std::convert::TryInto;
 
@@ -55,6 +56,20 @@ fn knots_vectors_survive_the_json_round_trip() {
 		let bits = u32::try_from(f["nBits"].as_u64().unwrap()).unwrap();
 
 		// Exactly the field set blockheaderToJSON emits for a v2 header.
+		//
+		// The vector file writes extranonce, xor_key and mm_rhs reversed;
+		// the RPC writes them in serialization order. So they are reversed
+		// here to turn vector form into RPC form — the opposite of what this
+		// test used to do, and the whole reason it is worth re-deriving
+		// rather than editing field names.
+		let rev = |v: &Value| -> String {
+			let mut b = Vec::<u8>::from_hex(v.as_str().unwrap()).unwrap();
+			b.reverse();
+			b.as_hex().to_string()
+		};
+		let le_hex = |v: &Value| -> String {
+			u32::try_from(v.as_u64().unwrap()).unwrap().to_le_bytes().as_hex().to_string()
+		};
 		let rpc = serde_json::json!({
 			"chainwork": SOME_CHAINWORK,
 			"height": f["m_height"],
@@ -64,16 +79,16 @@ fn knots_vectors_survive_the_json_round_trip() {
 			"time": f["nTime"],
 			"bits": bits.to_be_bytes().as_hex().to_string(),
 			"nonce": f["nNonce"],
-			"headerv": 2,
-			"nonce2": f["m_nonce2"],
-			"nonce3": f["m_nonce3"],
-			"extranonce": f["m_extranonce"],
-			"flags": f["m_flags"],
+			"header_version": 2,
+			"nonce2": le_hex(&f["m_nonce2"]),
+			"nonce3": le_hex(&f["m_nonce3"]),
+			"extranonce": rev(&f["m_extranonce"]),
+			"header_flags": f["m_flags"],
 			"time_offset": f["m_time_offset"],
 			"txcount": f["m_txcount"],
-			"xor_key": f["m_xor_key"],
+			"xor_key": rev(&f["m_xor_key"]),
 			"xor_key_mask_clear_bits": f["m_xor_key_mask_clear_bits"],
-			"mm_rhs": f["m_mm_rhs"],
+			"mm_rhs": rev(&f["m_mm_rhs"]),
 		});
 
 		let header = header_from(rpc).header;
@@ -111,7 +126,7 @@ fn a_knots_chain_converts_across_activation() {
 		let json = capture["json"].clone();
 		let height = json["height"].as_u64().unwrap();
 		let reported_hash = json["hash"].as_str().unwrap().to_owned();
-		let headerv = json["headerv"].as_u64().unwrap();
+		let headerv = json["header_version"].as_u64().unwrap();
 
 		let data = header_from(json);
 		let header = data.header;
@@ -119,7 +134,7 @@ fn a_knots_chain_converts_across_activation() {
 		assert_eq!(u64::from(data.height), height);
 
 		match headerv {
-			1 => assert!(header.v2.is_none(), "height {height} is a v1 header"),
+			0 => assert!(header.v2.is_none(), "height {height} is a v1 header"),
 			2 => assert!(header.v2.is_some(), "height {height} is a v2 header"),
 			_ => unreachable!(),
 		}
@@ -165,19 +180,19 @@ fn a_node_without_v2_headers_is_unaffected() {
 		"nonce": 1,
 	});
 
-	// A pre-fork node: no "headerv" at all.
+	// A pre-fork node: no "header_version" at all.
 	let core = header_from(base.clone()).header;
 	assert!(core.v2.is_none());
 	assert_eq!(encode::serialize(&core).len(), 80);
 
-	// Knots below the activation height.
+	// Knots below the activation height reports 0, not 1.
 	let mut knots_v1 = base.clone();
-	knots_v1["headerv"] = serde_json::json!(1);
+	knots_v1["header_version"] = serde_json::json!(0);
 	assert_eq!(header_from(knots_v1).header, core);
 
 	// A format we do not know is an error, not a guess.
 	let mut future = base;
-	future["headerv"] = serde_json::json!(3);
+	future["header_version"] = serde_json::json!(3);
 	assert!(TryInto::<BlockHeaderData>::try_into(JsonResponse(future)).is_err());
 }
 
@@ -187,11 +202,11 @@ fn an_incomplete_v2_header_is_rejected() {
 	let data: serde_json::Value =
 		serde_json::from_str(include_str!("data/regtest_activation.json")).unwrap();
 	let complete = data["headers"][1]["json"].clone();
-	assert_eq!(complete["headerv"], 2);
+	assert_eq!(complete["header_version"], 2);
 
 	for field in
-		["nonce2", "nonce3", "extranonce", "flags", "time_offset", "txcount", "xor_key",
-		 "xor_key_mask_clear_bits", "mm_rhs"]
+		["nonce2", "nonce3", "extranonce", "header_flags", "time_offset", "txcount",
+		 "xor_key", "xor_key_mask_clear_bits", "mm_rhs"]
 	{
 		let mut missing = complete.clone();
 		missing.as_object_mut().unwrap().remove(field);
@@ -214,7 +229,7 @@ fn a_block_with_a_v2_header_deserialises() {
 	let mut seen = 0;
 	for capture in data["headers"].as_array().unwrap() {
 		let Some(hex) = capture["block"].as_str() else { continue };
-		let headerv = capture["json"]["headerv"].as_u64().unwrap();
+		let headerv = capture["json"]["header_version"].as_u64().unwrap();
 		let height = capture["json"]["height"].as_u64().unwrap();
 
 		let block: bitcoin::Block =
